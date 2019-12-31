@@ -1,5 +1,6 @@
 import torch
 import other
+import os
 
 floatX = torch.float32
 
@@ -18,8 +19,8 @@ class FullConnection:
         self.dim_in = dim_in
         self.dim_out = dim_out
         self.learning_rate = learning_rate
-        self.params = torch.randn((dim_out, dim_in), dtype=floatX,device='cuda') / 500
-        self.biases = torch.randn((dim_out,), dtype=floatX,device='cuda') / 500
+        self.params = torch.randn((dim_out, dim_in), dtype=floatX, device='cuda') / 500
+        self.biases = torch.randn((dim_out,), dtype=floatX, device='cuda') / 500
 
         if activate_func == 'relu':
             self.activation = other.Relu()
@@ -66,6 +67,16 @@ class FullConnection:
         self.params -= self.learning_rate * grad_params
         self.biases -= self.learning_rate * grad_biases
         return next_eta
+
+    def save(self, folder_path: str):
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
+        torch.save(self.params, os.path.join(folder_path, 'params.bin'))
+        torch.save(self.biases, os.path.join(folder_path, 'biases.bin'))
+
+    def load(self, folder_path: str):
+        self.params = torch.load(os.path.join(folder_path, 'params.bin'))
+        self.biases = torch.load(os.path.join(folder_path, 'biases.bin'))
 
 
 if __name__ == '__main__':

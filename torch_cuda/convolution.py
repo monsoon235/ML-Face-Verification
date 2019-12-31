@@ -1,5 +1,6 @@
 from pooling import Pooling
 import other
+import os
 
 import torch
 import numpy as np
@@ -120,6 +121,16 @@ class Convolution:
         self.filters -= self.learning_rate * self.filters_gradient
         self.biases -= self.learning_rate * biases_gradient
         return next_eta
+
+    def save(self, folder_path: str):
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
+        torch.save(self.filters, os.path.join(folder_path, 'filters.bin'))
+        torch.save(self.biases, os.path.join(folder_path, 'biases.bin'))
+
+    def load(self, folder_path: str):
+        self.filters = torch.load(os.path.join(folder_path, 'filters.bin'))
+        self.biases = torch.load(os.path.join(folder_path, 'biases.bin'))
 
 
 # 卷积的 naive 实现

@@ -4,10 +4,12 @@ from sklearn.metrics import f1_score
 
 import torch
 import time
+import os
 
 import convolution, full_connection, pooling, preprocess, other
 
 floatX = torch.float32
+device = 'cuda'
 torch.set_num_threads(72)
 
 max_batch = 200
@@ -15,14 +17,16 @@ img_size = 119
 deepid_dim = 1000
 cross_dim = 500
 
-conv1_learning_rate = 1e-5 / max_batch
-conv2_learning_rate = 1e-5 / max_batch
-conv3_learning_rate = 1e-5 / max_batch
-conv4_learning_rate = 1e-5 / max_batch
-fc1_learning_rate = 1e-5 / max_batch
-fc2_learning_rate = 1e-5 / max_batch
-fc_cross_learning_rate = 1e-5 / max_batch
-fc_softmax_learning_rate = 1e-5 / max_batch
+# 1e-3 发散
+
+conv1_learning_rate = 2e-4 / max_batch
+conv2_learning_rate = 2e-4 / max_batch
+conv3_learning_rate = 2e-4 / max_batch
+conv4_learning_rate = 2e-4 / max_batch
+fc1_learning_rate = 2e-4 / max_batch
+fc2_learning_rate = 2e-4 / max_batch
+fc_cross_learning_rate = 2e-4 / max_batch
+fc_softmax_learning_rate = 2e-4 / max_batch
 
 ks1 = 4
 ks2 = 3
@@ -99,6 +103,7 @@ class DeepID:
                                                   activate_func='relu')
 
     def forward(self, in_data: torch.Tensor) -> torch.Tensor:
+        assert in_data.is_cuda
         self.batch = in_data.shape[0]
         assert in_data.shape == (self.batch, img_size, img_size, 3)
         out3 = self.pool3.forward(self.conv3.forward(
@@ -110,12 +115,13 @@ class DeepID:
         out3 = out3.flatten(start_dim=1, end_dim=-1)
         out4 = out4.flatten(start_dim=1, end_dim=-1)
 
-        id = torch.empty((self.batch, deepid_dim), dtype=floatX)
+        id = torch.empty((self.batch, deepid_dim), dtype=floatX, device=device)
         id[:, :deepid_dim // 2] = self.fc1.forward(out3)
         id[:, deepid_dim // 2:] = self.fc2.forward(out4)
         return id
 
     def backward(self, eta: torch.Tensor) -> torch.Tensor:
+        assert eta.is_cuda
         assert eta.shape == (self.batch, deepid_dim)
         shape3 = (self.pool3.batch, self.pool3.height // self.pool3.pool_size,
                   self.pool3.width // self.pool3.pool_size, oc3)
@@ -129,6 +135,28 @@ class DeepID:
                     eta3 + eta4
                 ))))))
         return next_eta
+
+    def save(self, folder_path: str):
+        self.conv1.save(os.path.join(folder_path, 'conv1'))
+        self.conv2.save(os.path.join(folder_path, 'conv2'))
+        self.conv3.save(os.path.join(folder_path, 'conv3'))
+        self.conv4.save(os.path.join(folder_path, 'conv4'))
+        self.pool1.save(os.path.join(folder_path, 'pool1'))
+        self.pool2.save(os.path.join(folder_path, 'pool2'))
+        self.pool3.save(os.path.join(folder_path, 'pool3'))
+        self.fc1.save(os.path.join(folder_path, 'fc1'))
+        self.fc2.save(os.path.join(folder_path, 'fc2'))
+
+    def load(self, folder_path: str):
+        self.conv1.load(os.path.join(folder_path, 'conv1'))
+        self.conv2.load(os.path.join(folder_path, 'conv2'))
+        self.conv3.load(os.path.join(folder_path, 'conv3'))
+        self.conv4.load(os.path.join(folder_path, 'conv4'))
+        self.pool1.load(os.path.join(folder_path, 'pool1'))
+        self.pool2.load(os.path.join(folder_path, 'pool2'))
+        self.pool3.load(os.path.join(folder_path, 'pool3'))
+        self.fc1.load(os.path.join(folder_path, 'fc1'))
+        self.fc2.load(os.path.join(folder_path, 'fc2'))
 
 
 class FaceVerification:
@@ -148,70 +176,101 @@ class FaceVerification:
                                                          activate_func='softmax')
 
     def forward(self, in_data: torch.Tensor) -> torch.Tensor:
+        assert in_data.is_cuda
         self.batch = in_data.shape[0]
         assert in_data.shape == (self.batch, 2, img_size, img_size, 3)
         id1 = self.deepid1.forward(in_data[:, 0])
         id2 = self.deepid2.forward(in_data[:, 1])
-        id_cross = self.fc_cross.forward(torch.cat((id1, id2), dim=1).cuda())
+        id_cross = self.fc_cross.forward(torch.cat((id1, id2), dim=1))
         softmax = self.fc_softmax.forward(id_cross)
         return softmax
 
     def backward(self, eta: torch.Tensor):
+        assert eta.is_cuda
         assert eta.shape == (self.batch, 2)
         eta_cross = self.fc_softmax.backward(eta)
         eta_id = self.fc_cross.backward(eta_cross)
         self.deepid1.backward(eta_id[:, :deepid_dim])
         self.deepid2.backward(eta_id[:, deepid_dim:])
 
-    def get_labels(self, pred: torch.Tensor) -> torch.Tensor:
-        return pred.argmax(dim=1)
+    def get_labels(self, pred_proba: torch.Tensor) -> torch.Tensor:
+        return pred_proba.argmax(dim=1)
 
-    def get_loss_and_dy(self, pred: torch.Tensor, true_labels: torch.Tensor) -> Tuple[torch.Tensor, ...]:
-        true_onehot = torch.zeros(pred.shape)
-        for b in range(pred.shape[0]):
+    def get_loss_and_eta(self, pred_proba: torch.Tensor, true_labels: torch.Tensor) -> Tuple[torch.Tensor, ...]:
+        # TODO check
+        true_onehot = torch.zeros(pred_proba.shape)
+        for b in range(pred_proba.shape[0]):
             true_onehot[b, true_labels[b]] = 1
-        loss = -true_onehot * torch.log(pred)
-        # print(pred)
-        # print(true_onehot)
-        # print(loss)
-        dy = -true_onehot / pred
-        assert not torch.isnan(dy).any()
-        assert not torch.isinf(dy).any()
-        return loss.sum(), dy
+        loss = -true_onehot * torch.log(pred_proba)
+        eta = -true_onehot / pred_proba
+        assert not torch.isnan(eta).any()
+        assert not torch.isinf(eta).any()
+        return loss.sum(), eta
 
-    def train(self, imgs: torch.Tensor, labes: torch.Tensor, iteration_limit):
+    def get_pred_proba(self, imgs: torch.Tensor) -> torch.Tensor:
         all_batch = imgs.shape[0]
         assert imgs.shape == (all_batch, 2, img_size, img_size, 3)
-        assert labes.shape == (all_batch,)
         if all_batch % max_batch == 0:
             batch_num = all_batch // max_batch
         else:
             batch_num = all_batch // max_batch + 1
-        print('start iteration....')
+        pred_proba = torch.empty((all_batch, 2))
+        for b in range(batch_num):
+            batch_imgs = imgs[b * max_batch:(b + 1) * max_batch].cuda()
+            pred_proba[b * max_batch:(b + 1) * max_batch] = self.forward(batch_imgs).cpu()
+        return pred_proba
+
+    def train(self, imgs: torch.Tensor, labes: torch.Tensor, iteration_limit):
+        n = imgs.shape[0]
+        assert imgs.shape == (n, 2, img_size, img_size, 3)
+        assert labes.shape == (n,)
+        if n % max_batch == 0:
+            batch_num = n // max_batch
+        else:
+            batch_num = n // max_batch + 1
+
+        train_pred_proba_all = torch.empty((n, 2))  # 分 batch 迭代时所有输出的训练集 proba
         for i in range(iteration_limit):
-            print(f'---------> iteration {i}')
+            print(f'========> iteration {i}')
+            time_all = 0
             for j in range(batch_num):
-                print(f'\t-----> batch {j}')
+                print(f'\t====> batch {j}')
                 start = time.time()
-                batch_data = imgs[j * max_batch:(j + 1) * max_batch]
-                batch_labels = labes[j * max_batch:(j + 1) * max_batch]
-                pred = self.forward(batch_data.cuda()).cpu()
-                loss, dy = self.get_loss_and_dy(pred, batch_labels)
-                self.backward(dy.cuda())
-                print(f'\tloss = {loss}, time cost = {time.time() - start} s')
-                pred = self.forward(test_imgs.cuda()).cpu()
-                print(f'\tF1 = {f1_score(test_labels, self.get_labels(pred))}')
+                index_start = j * max_batch
+                index_end = (j + 1) * max_batch
+                batch_imgs = imgs[index_start:index_end].cuda()
+                batch_labels = labes[index_start:index_end]
+
+                train_pred_proba_all[index_start:index_end] = self.forward(batch_imgs).cpu()  # 前向传播
+                loss, eta = self.get_loss_and_eta(train_pred_proba_all[index_start:index_end], batch_labels)
+                self.backward(eta.cuda())  # 反向传播
+
+                time_cost = time.time() - start
+                time_all += time_cost
+                print(f'\tbatch loss = {loss},\ttime = {time_cost} s')
+
+            loss_all, _ = self.get_loss_and_eta(train_pred_proba_all, train_labels)  # 所有训练集的 loss
+            test_pred_proba = self.get_pred_proba(test_imgs)
+            f1_all = f1_score(test_labels, self.get_labels(test_pred_proba))  # 测试集的 F1
+            print(f'iteration loss = {loss_all},\ttime = {time_all}')
+            print(f'iteration F1 = {f1_all}')
+            print()
+
+    def save(self, folder_path):
+        self.deepid1.save(os.path.join(folder_path, 'deepid1'))
+        self.deepid2.save(os.path.join(folder_path, 'deepid2'))
+        self.fc_cross.save(os.path.join(folder_path, 'fc_cross'))
+        self.fc_softmax.save(os.path.join(folder_path, 'fc_softmax'))
+
+    def load(self, folder_path):
+        self.deepid1.load(os.path.join(folder_path, 'deepid1'))
+        self.deepid2.load(os.path.join(folder_path, 'deepid2'))
+        self.fc_cross.load(os.path.join(folder_path, 'fc_cross'))
+        self.fc_softmax.load(os.path.join(folder_path, 'fc_softmax'))
 
 
 if __name__ == '__main__':
-    imgs, labels = preprocess.get_images()
-
-    n = imgs.shape[0]
-    split = n - max_batch
-    test_imgs = imgs[split:]
-    test_labels = labels[split:]
-    train_imgs = imgs[:split]
-    train_labels = labels[:split]
-
+    train_imgs, train_labels, test_imgs, test_labels = preprocess.get_images()
     fv = FaceVerification()
-    fv.train(train_imgs, train_labels, 1000)
+    fv.train(train_imgs, train_labels, 500)
+    fv.save('../saved_model')
