@@ -18,15 +18,18 @@ deepid_dim = 1000
 cross_dim = 500
 
 # 1e-3 发散
+# 2e-4 发散
 
-conv1_learning_rate = 2e-4 / max_batch
-conv2_learning_rate = 2e-4 / max_batch
-conv3_learning_rate = 2e-4 / max_batch
-conv4_learning_rate = 2e-4 / max_batch
-fc1_learning_rate = 2e-4 / max_batch
-fc2_learning_rate = 2e-4 / max_batch
-fc_cross_learning_rate = 2e-4 / max_batch
-fc_softmax_learning_rate = 2e-4 / max_batch
+# 1e-5 迭代 300 论即可
+
+conv1_learning_rate = 1e-4 / max_batch
+conv2_learning_rate = 1e-4 / max_batch
+conv3_learning_rate = 1e-4 / max_batch
+conv4_learning_rate = 1e-4 / max_batch
+fc1_learning_rate = 1e-4 / max_batch
+fc2_learning_rate = 1e-4 / max_batch
+fc_cross_learning_rate = 1e-4 / max_batch
+fc_softmax_learning_rate = 1e-4 / max_batch
 
 ks1 = 4
 ks2 = 3
