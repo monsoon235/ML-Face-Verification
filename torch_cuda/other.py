@@ -43,6 +43,44 @@ class Softmax:
             next_eta[b] = (cross[b] @ eta[b].reshape((n, 1))).reshape((n,))
         return next_eta
 
+
+class MFM:
+    mask: torch.Tensor
+
+    def forward(self, in_data: torch.Tensor) -> torch.Tensor:
+        assert in_data.is_cuda
+        b, h, w, c = in_data.shape
+        assert c % 2 == 0
+        s = in_data.stride()
+        new_stride = (s[0], s[1], s[2], s[3], s[3] * c // 2)
+        data = in_data.as_strided(size=(b, h, w, c // 2, 2), stride=new_stride)
+        out = data.max(dim=4)[0]
+        # 检验
+        # assert (out == torch.max(in_data[:, :, :, :c // 2], in_data[:, :, :, c // 2:])).all()
+        self.mask = data == out.reshape((b, h, w, c // 2, 1))
+        return out
+
+    def backward(self, eta: torch.Tensor) -> torch.Tensor:
+        assert eta.is_cuda
+        b, h, w, c2 = eta.shape
+        c = c2 * 2
+        s = eta.stride()
+        new_stride = (s[0], s[1], s[2], s[3], 0)
+        eta = eta.as_strided(size=(b, h, w, c // 2, 2), stride=new_stride)
+        next_eta = eta * self.mask
+        next_eta = torch.cat((next_eta[:, :, :, :, 0], next_eta[:, :, :, :, 1]), dim=3)
+        assert next_eta.shape == (b, h, w, c)
+        return next_eta
+
+
+if __name__ == '__main__':
+    mfm = MFM()
+    data = torch.randn((2, 2, 2, 2), device='cuda', dtype=floatX)
+    res = mfm.forward(data)
+    print(res)
+    eta = mfm.backward(res)
+    print(eta)
+
 # class Sigmoid:
 #     out_data: torch.Tensor
 #     coe: float
